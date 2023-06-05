@@ -1,0 +1,231 @@
+---
+title: "INFO 662 Term Project"
+author: "Joanna Schroder"
+date: '2023-06-02'
+output: html_document
+---
+
+```{r setup}
+# Load libraries
+library(xml2)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(tidyverse)
+library(RColorBrewer)
+library(ggtext)
+
+# Set custom color palette
+my_pal <- brewer.pal(11, "PRGn")[c(2, 9)]
+
+# Set working directory
+setwd("~/Google Drive/My Drive/Drexel/INFO 662 - Metadata and Resource Description/Term Project")
+
+# Read file with record urls
+records <- read_csv("mods_xml.csv", col_names = FALSE) %>% pull(1)
+# Create full url for Elections Web Archive records
+loc <- paste0("https://tile.loc.gov/storage-services/service/webcapture/project_1/mods/united-states-elections-web-archive/", records[1:40], ".xml")
+dlc <- records[41:80]
+
+# Create an object with the 20 MODS top-level elements
+element <- c("titleInfo", "name", "language", "note", "physicalDescription", "subject", "accessCondition", "typeOfResource", "abstract", "classification", "part", "genre", "tableOfContents", "relatedItem", "extension", "originInfo", "targetAudience", "identifier", "recordInfo", "location")
+```
+
+```{r create-element-value-df}
+# Loop through top-level elements, pull out observations and values in each metadata record
+
+# Initalize objects
+table <- NULL
+tables <- NULL
+
+# Elections Web Archive
+for(i in 1:length(loc)){
+  for(e in 1:length(element)){
+    xml <- read_xml(loc[i])
+    table <- xml %>% xml_ns_strip() %>% xml_find_all(paste0("//", element[e])) %>% xml_text() %>% as_tibble() %>% mutate(record = i, element = element[e])
+    tables <- rbind(table, tables)
+  }
+}
+
+# Create object, save csv for easy access
+loc <- tables %>% mutate(collection = "loc")
+#write.csv(loc, "loc.csv")
+
+# Digital Library of the Caribbean
+# MODS record is nested within, need to pull it out by itself
+for(i in 1:length(dlc)){
+  for(e in 1:length(element)){
+    xml <- read_xml(dlc[i])
+    table <- xml %>% xml_find_all(".//mods:mods") %>% xml_find_all(paste0("//mods:", element[e])) %>% xml_text() %>% as_tibble() %>% mutate(record = i, element = element[e])
+    tables <- rbind(table, tables)
+  }
+}
+
+# Create object, save csv for easy access
+dlc <- tables %>% mutate(collection = "dlc")
+#write.csv(dlc, "dlc.csv")
+```
+
+```{r analyze-elements, fig.height = 4, fig.width = 6}
+dlc <- read_csv("dlc.csv")
+loc <- read_csv("loc.csv")
+
+# Bind rows of two collections
+meadata <- rbind(dlc, loc)
+# Calculate the overall count of elements, the average number of times each each element is used per record (Table 1)
+metadata %>% group_by(element, collection) %>% summarise(count = n(), times_per_record = count/40)
+# Calculate percent missing
+metadata %>% distinct(record, element, collection) %>% group_by(element, collection) %>% mutate(count = n()) %>% mutate(perc_missing = 100- (count/40*100)) %>% distinct(element, collection, count, perc_missing)
+loc %>% distinct(record, element) %>% group_by(record) %>% mutate(n = n()) %>% mutate(perc = n/20) %>% distinct(record, perc) %>% ungroup(record) %>% summarise(perc = mean(perc))
+
+
+# Calculate percent missing by local guidelines
+loc %>% distinct(record, element) %>% group_by(record) %>% mutate(n = n()) %>% mutate(perc = n/14) %>% distinct(record, perc) %>% ungroup(record) %>% summarise(perc = mean(perc))
+dlc %>% distinct(record, element) %>% group_by(record) %>% mutate(n = n()) %>% mutate(perc = n/17) %>% distinct(record, perc) %>% ungroup(record) %>% summarise(perc = mean(perc))
+
+# Digital Library of the Caribbean percent compelete historgram (Figure 3)
+dlc %>% distinct(record, element) %>% group_by(record) %>% mutate(n = n()) %>% mutate(perc = (n/20)*100) %>% distinct(record, perc) %>% 
+  ggplot(aes(x = perc)) +
+  geom_histogram(binwidth = 5, fill = "#762A83") +
+  labs(y = "Number of Observations", x = "Metadata % Element Completeness",
+       caption = "Based on 40 random records collected from the repository. \n
+       Data Source: https://www.dloc.com/",
+       title = "Metadata Record Completeness",
+       subtitle = "Subset of Digital Library of the Caribbean Metadata") +
+  theme_minimal() #+
+  #scale_fill_manual(values = my_pal, name = "Collection",
+  #                  labels=c("Digital Library of the Caribbean", "Elections Web Archive"))
+loc %>% distinct(record, element) %>% group_by(record) %>% mutate(n = n()) %>% mutate(perc = n/20) %>% distinct(record, perc) %>% ggplot(aes(x = perc)) + geom_density()
+
+# Exploring specific elements
+dlc %>% filter(element == "note") %>% pull(value) %>% nchar() %>% mean()
+dlc %>% filter(element == "abstract") %>% pull(value) %>% nchar() %>% mean()
+dlc %>% filter(element == "accessCondition") %>% ggplot(aes(x = value)) + geom_histogram(stat = "count")
+dlc %>% filter(element == "physicalDescription") %>% head() 
+loc %>% filter(element == "name") %>% ggplot(aes(x = value)) + geom_histogram(stat = "count")
+```
+```{r compare-elements-graphic}
+# Manipulate data before piping it into the ggplot() call
+metadata %>% group_by(element, collection) %>% mutate(count = n()) %>% distinct(element, count, collection) %>%
+# Set aesthetic mapping for all layers
+# Reorder a variable by its value
+  ggplot(aes(x = reorder(element, count), y = count, fill = collection)) +
+# Create a column layer, set the columns to equal width
+  geom_col(position = position_dodge(preserve = "single")) +
+# Flip the axes
+  coord_flip() +
+# Add a default theme before theme alterations
+  theme_minimal() +
+# Alter the legend position
+  theme(legend.position = "bottom",
+# Alter the text size
+        text = element_text(size = 20)) +
+# Add annotations, specify their position and color
+  annotate("text", y = 440, x = 16.25, label = "In the Elections Web Archive, subject repeats a mean \n average of 12.8 times per metadata record", color = my_pal[2]) + 
+  annotate("text", y = 120, x = 1.8, label = "The Digital Library of the Caribbean metadata contains three \n unique top-level elements: note, abstract, and classification" , color = my_pal[1]) + 
+# Modify the titles, axes labels, and caption
+  labs(title = "Frequency of Top-Level Elements",
+      # subtitle = "Frequency of Top-Level Elements",
+       y = "Number of Observations",
+       x = "Top-Level Element",
+       caption = "Based on 40 random records collected from each repository (80 records total). \n
+       Data Sources: https://www.dloc.com/ and \n
+       https://www.loc.gov/collections/united-states-elections-web-archive/") +
+# Add a custom color palette, alter the names for the legend and variables
+  scale_fill_manual(values = my_pal, name = "Collection",
+                      labels=c("Digital Library of the Caribbean", "Elections Web Archive"))
+
+# Save our plot
+getwd()
+ggsave("metadata_exploration-element_comparison_bar.png", plot = last_plot(),
+       height = 10, width = 14, units = "in", bg = "white")
+```
+
+
+```{r analyze-authories-and-encodings, fig.height = 4, fig.width = 6}
+# Read file with record urls
+records <- read_csv("mods_xml.csv", col_names = FALSE) %>% pull(1)
+# Create full url for Elections Web Archive records
+loc <- paste0("https://tile.loc.gov/storage-services/service/webcapture/project_1/mods/united-states-elections-web-archive/", records[1:40], ".xml")
+dlc <- records[41:80]
+
+# Initalize objects
+authority <- NULL
+encoding <- NULL
+loc_authorities <- NULL
+loc_encodings <- NULL
+
+# Loop through LOC records to find observations of authorities and encoding schemes, write them to an object
+for(i in 1:length(loc)){
+  authority <- read_xml(loc[i]) %>% xml_find_all("//@authority") %>% xml_text()
+  loc_authorities <- c(authority, loc_authorities)
+  encoding <- read_xml(loc[i]) %>% xml_find_all("//@encoding") %>% xml_text()
+  loc_encodings <- c(encoding, loc_encodings)
+}
+
+# Initalize objects
+authority <- NULL
+encoding <- NULL
+dlc_authorities <- NULL
+dlc_encodings <- NULL
+
+# Loop through DLC records to find observations of authorities and encoding schemes, write them to an object
+for(i in 1:length(dlc)){
+  authority <- read_xml(dlc[i]) %>% xml_find_all(".//mods:mods") %>% xml_find_all("//@authority") %>% xml_text()
+  dlc_authorities <- c(authority, dlc_authorities)
+  encoding <- read_xml(dlc[i]) %>% xml_find_all(".//mods:mods") %>% xml_find_all("//@encoding") %>% xml_text()
+  dlc_encodings <- c(encoding, dlc_encodings)
+}
+
+# Create a tibble with for authority graphic comparison
+dlc_a <- tibble("authority" = dlc_authorities, "repository" = "Digital Library of the Caribbean")
+loc_a <- tibble("authority" = loc_authorities, "repository" = "United States Election Archive")
+auth <- rbind(dlc_a, loc_a)
+
+# Compare authories graphic (Figure 2)
+auth %>% group_by(authority) %>% mutate(total = n()) %>% group_by(authority, repository) %>% 
+  mutate(n = n()) %>% distinct() %>%
+  ggplot(aes(x = fct_reorder(authority, -total), y = n, fill = repository)) +
+  geom_col() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1),
+        legend.position = "bottom",
+        text = element_text(size = 20)) +
+  labs(fill = "",
+       x = "Authority",
+       y = "Number of Observations",
+       caption = "Based on 40 random records collected from each repository (80 records total)  \n
+       Data Sources: https://www.dloc.com/ and \n
+       https://www.loc.gov/collections/united-states-elections-web-archive/.",
+       title = "Controlled Vocabularies Comparison") +
+  scale_fill_manual(values = my_pal, name = "Collection",
+                  labels=c("Digital Library of the Caribbean", "Elections Web Archive"))
+
+# Summary stats for authority compairson
+auth %>% group_by(authority) %>% mutate(total = n()) %>% group_by(authority, repository) %>% 
+  mutate(n = n()) %>% distinct()
+
+# Create a tibble with for encoding graphic compairson
+dlc_e <- tibble("encoding" = dlc_encodings, "repository" = "Digital Library of the Caribbean")
+loc_e <- tibble("encoding" = loc_encodings, "repository" = "United States Election Archive")
+enco <- rbind(dlc_e, loc_e)
+
+# Create a tibble with for encoding scheme graphic compairson
+enco %>% group_by(encoding) %>% mutate(total = n()) %>% group_by(encoding, repository) %>% 
+  mutate(n = n()) %>% distinct() %>%
+  ggplot(aes(x = fct_reorder(encoding, -total), y = n, fill = repository)) +
+  geom_col() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1),
+        legend.position = "bottom",
+        text = element_text(size = 20)) +
+  labs(fill = "",
+       x = "Encoding Scheme",
+       y = "Number of Observations",title = "Encoding Scheme Comparison",
+       caption = "Based on 40 random records collected from each repository (80 records total)  \n
+       Data Sources: https://www.dloc.com/ and \n
+       https://www.loc.gov/collections/united-states-elections-web-archive/.") +
+  scale_fill_manual(values = my_pal, name = "Collection",
+                    labels=c("Digital Library of the Caribbean", "Elections Web Archive"))
+
+```
